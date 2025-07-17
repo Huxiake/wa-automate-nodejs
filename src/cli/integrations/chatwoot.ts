@@ -6,6 +6,7 @@ import { default as axios } from 'axios'
 import { default as FormData } from 'form-data'
 import mime from 'mime-types';
 import { timeout } from '../../utils/tools'
+import { globalSessionManager } from '../../controllers/SessionManager';
 
 const contactReg = {
     //WID : chatwoot contact ID
@@ -126,8 +127,8 @@ export const chatwootMiddleware: (cliConfig: cliFlags, client: Client) => expres
     }
 }
 
-export const setupChatwootOutgoingMessageHandler: (cliConfig: cliFlags, client: Client) => Promise<void> = async (cliConfig: cliFlags, client: Client) => {
-    chatwootClient = new ChatwootClient(cliConfig as ChatwootConfig,client);
+export const setupChatwootOutgoingMessageHandler: (cliConfig: ChatwootConfig, client: Client) => Promise<void> = async (cliConfig, client) => {
+    chatwootClient = new ChatwootClient(cliConfig, client);
     await chatwootClient.init()
     return;
 }
@@ -172,7 +173,8 @@ export type ChatwootConfig = {
     /**
      * port
      */
-    port: number
+    port: number,
+    client?: Client; // 添加可选的client属性
 }
 
 class ChatwootClient {
@@ -186,7 +188,8 @@ class ChatwootClient {
     port: number;
     forceUpdateCwWebhook?: boolean;
     key: string;
-    client: Client
+    client: Client;
+    webhookVerified = false; // 添加属性
 
     constructor(cliConfig: ChatwootConfig, client: Client) {
         const u = cliConfig.chatwootUrl as string //e.g `"localhost:3000/api/v1/accounts/3"
@@ -324,9 +327,10 @@ class ChatwootClient {
                     const checkCodeResponse = await checkCodePromise;
                     if (checkCodeResponse && checkCodeResponse[0]?.checkCode == checkCode) resolve(true); else reject(`Webhook check code is incorrect. Expected ${checkCode} - incoming ${((checkCodeResponse || [])[0] || {}).checkCode}`)
                 })
+                this.webhookVerified = true; // 验证成功后设置为true
                 log.info('Chatwoot webhook verification successful')
             } catch (error) {
-                cancelCheckProm()
+                this.webhookVerified = false;
                 const e = `Unable to verify the chatwoot webhook URL on this inbox: ${error.message}`;
                 console.error(e)
                 log.error(e)
@@ -678,3 +682,128 @@ class ChatwootClient {
 
 
 }
+
+// 添加多session支持的Chatwoot集成类
+export class MultiSessionChatwootIntegration {
+    public config: any; // 设为public
+    private chatwootClients: Map<string, ChatwootClient> = new Map();
+
+    constructor(config: any) {
+        this.config = config;
+    }
+
+    /**
+     * 为指定session初始化Chatwoot集成
+     */
+    async initSessionChatwoot(sessionId: string, chatwootConfig: ChatwootConfig): Promise<boolean> {
+        try {
+            const client = chatwootConfig.client || globalSessionManager.getClient(sessionId);
+            if (!client) {
+                log.error(`Cannot find client for session ${sessionId}`);
+                return false;
+            }
+
+            const sessionChatwootConfig: ChatwootConfig = {
+                ...chatwootConfig,
+                //确保使用完整的、正确的webhook URL
+                apiHost: `${this.config.webhookBaseUrl}/${sessionId}/chatwoot/webhook`,
+            };
+            
+            const chatwootClient = new ChatwootClient(sessionChatwootConfig, client);
+            await chatwootClient.init();
+            this.chatwootClients.set(sessionId, chatwootClient);
+            log.info(`Chatwoot integration initialized for session: ${sessionId}`);
+            return true;
+        } catch (error) {
+            log.error(`Failed to initialize Chatwoot for session ${sessionId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * 为session移除Chatwoot集成
+     */
+    async removeSessionChatwoot(sessionId: string): Promise<boolean> {
+        try {
+            if (this.chatwootClients.has(sessionId)) {
+                this.chatwootClients.delete(sessionId);
+                log.info(`Chatwoot integration removed for session: ${sessionId}`);
+                return true;
+            }
+            return false;
+        } catch (error) {
+            log.error(`Failed to remove Chatwoot for session ${sessionId}:`, error);
+            return false;
+        }
+    }
+
+    /**
+     * 获取session的Chatwoot客户端
+     */
+    getChatwootClient(sessionId: string): ChatwootClient | undefined {
+        return this.chatwootClients.get(sessionId);
+    }
+
+    /**
+     * 处理来自Chatwoot的webhook消息
+     */
+    createWebhookHandler(sessionId: string) {
+        return async (req: Request, res: Response): Promise<Response<any, Record<string, any>>> => {
+            // 在此处添加详细的日志记录
+            log.info(`[Chatwoot Webhook] Received request for session: ${sessionId}`);
+            log.info(`[Chatwoot Webhook] Headers: ${JSON.stringify(req.headers, null, 2)}`);
+            log.info(`[Chatwoot Webhook] Body: ${JSON.stringify(req.body, null, 2)}`);
+
+            const chatwootClient = this.chatwootClients.get(sessionId);
+            if (!chatwootClient) {
+                log.error(`[Chatwoot Webhook] No Chatwoot integration found for session: ${sessionId}`);
+                return res.status(404).json({
+                    error: `No Chatwoot integration found for session: ${sessionId}`
+                });
+            }
+
+            const client = globalSessionManager.getClient(sessionId);
+            if (!client) {
+                log.error(`[Chatwoot Webhook] Session ${sessionId} not found or not ready`);
+                return res.status(404).json({
+                    error: `Session ${sessionId} not found or not ready`
+                });
+            }
+
+            // 使用原有的chatwootMiddleware逻辑，但针对特定session
+            log.info(`[Chatwoot Webhook] Forwarding to chatwootMiddleware for session: ${sessionId}`);
+            return chatwootMiddleware({ key: this.config.key }, client)(req, res);
+        };
+    }
+
+    /**
+     * 获取所有活跃的Chatwoot集成
+     */
+    getActiveChatwootSessions(): string[] {
+        return Array.from(this.chatwootClients.keys());
+    }
+
+    public async getSessionChatwootStatus(sessionId: string): Promise<any> {
+        const client = this.chatwootClients.get(sessionId);
+        if(!client) return null;
+        return {
+            inboxId: client.inboxId,
+            accountId: client.accountId,
+            webhookUrl: client.expectedSelfWebhookUrl,
+            isWebhookVerified: client.webhookVerified,
+        }
+    }
+}
+
+// 全局多session Chatwoot集成实例
+export let multiSessionChatwoot: MultiSessionChatwootIntegration | null = null;
+
+/**
+ * 初始化多session Chatwoot集成
+ */
+export const initMultiSessionChatwoot = (config: any): MultiSessionChatwootIntegration => {
+    if (!multiSessionChatwoot) {
+        multiSessionChatwoot = new MultiSessionChatwootIntegration(config);
+    }
+    return multiSessionChatwoot;
+};

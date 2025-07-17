@@ -199,7 +199,7 @@ async function start() {
                 const statsLink = terminalLink('API Stats', swaggerStatsUrl);
                 spinner.succeed(`\n\t${statsLink}`)
             }
-            if(cliConfig?.chatwootUrl) await setupChatwootOutgoingMessageHandler(cliConfig, client);
+            if(cliConfig?.chatwootUrl) await setupChatwootOutgoingMessageHandler(cliConfig as any, client);
         }
         await ready({...createConfig, ...cliConfig, ...client.getSessionInfo(), hostAccountNumber: await client.getHostNumber()});
         if (cliConfig.emitUnread) {

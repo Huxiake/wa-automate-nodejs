@@ -130,7 +130,8 @@ export async function create(config: AdvancedConfig | ConfigObject = {}): Promis
   }
   if (!sessionId) sessionId = 'session';
   const spinner = new Spin(sessionId, 'STARTUP', config?.disableSpins);
-  const qrManager = new QRManager(config);
+  // 强制让 QRManager 不在控制台打印二维码，以确保服务器以静默模式启动
+  const qrManager = new QRManager({ ...config, qrLogSkip: true });
   const RAM_INFO = `Total: ${parseFloat(`${os.totalmem() / 1000000000}`).toFixed(2)} GB | Free: ${parseFloat(`${os.freemem() / 1000000000}`).toFixed(2)} GB`
   log.info("RAM INFO", RAM_INFO)
   const PPTR_VERSION = readJsonSync(require.resolve("puppeteer/package.json"), {throws:false})?.version || "UNKNOWN";

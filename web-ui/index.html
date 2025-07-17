@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Open-WA 多会话管理</title>
+    <link href="/assets/css/style.css" rel="stylesheet">
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- 头部导航 -->
+        <header class="header">
+            <div class="logo">
+                <i class="fab fa-whatsapp"></i>
+                <h1>Open-WA 管理中心</h1>
+            </div>
+            <div class="server-status">
+                <span class="status-indicator online" id="serverStatus"></span>
+                <span>服务器状态</span>
+            </div>
+        </header>
+
+        <!-- 主要内容区域 -->
+        <main class="main-content">
+            <!-- 操作工具栏 -->
+            <div class="toolbar">
+                <button class="btn btn-primary" onclick="showCreateSessionModal()">
+                    <i class="fas fa-plus"></i> 新建会话
+                </button>
+                <button class="btn btn-secondary" onclick="refreshSessions()">
+                    <i class="fas fa-sync-alt"></i> 刷新
+                </button>
+                <div class="search-box">
+                    <input type="text" placeholder="搜索会话..." id="searchInput" onkeyup="filterSessions()">
+                    <i class="fas fa-search"></i>
+                </div>
+            </div>
+
+            <!-- 会话列表 -->
+            <div class="sessions-container">
+                <div class="sessions-header">
+                    <h2>会话列表 (<span id="sessionCount">0</span>)</h2>
+                </div>
+                <div class="sessions-grid" id="sessionsGrid">
+                    <!-- 会话卡片将在这里动态生成 -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- 创建会话模态框 -->
+    <div class="modal" id="createSessionModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>创建新会话</h3>
+                <span class="close" onclick="closeModal('createSessionModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>会话 ID</label>
+                    <input type="text" id="newSessionId" placeholder="输入会话ID，例如：my-session-1">
+                </div>
+                <div class="form-group">
+                    <label>代理配置（可选）</label>
+                    <input type="text" id="proxyConfig" placeholder="http://username:password@proxy-server:port">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="waitForQR" checked> 创建后立即获取二维码
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('createSessionModal')">取消</button>
+                <button class="btn btn-primary" onclick="createSession()">创建会话</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- QR码显示模态框 -->
+    <div class="modal" id="qrModal">
+        <div class="modal-content qr-modal">
+            <div class="modal-header">
+                <h3>扫描二维码登录</h3>
+                <span class="close" onclick="closeModal('qrModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="qr-container">
+                    <div class="qr-code" id="qrCodeContainer">
+                        <div class="qr-loading">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <p>正在生成二维码...</p>
+                        </div>
+                    </div>
+                    <div class="qr-instructions">
+                        <p><i class="fas fa-mobile-alt"></i> 使用 WhatsApp 扫描此二维码</p>
+                        <p><small>打开 WhatsApp → 设置 → 关联设备 → 关联设备</small></p>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('qrModal')">关闭</button>
+                <button class="btn btn-primary" onclick="refreshQR()">刷新二维码</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Chatwoot配置模态框 -->
+    <div class="modal" id="chatwootModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>配置 Chatwoot 集成</h3>
+                <span class="close" onclick="closeModal('chatwootModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Chatwoot URL</label>
+                    <input type="text" id="chatwootUrl" placeholder="https://app.chatwoot.com/api/v1/accounts/123/inboxes/456">
+                </div>
+                <div class="form-group">
+                    <label>API Access Token</label>
+                    <input type="text" id="chatwootToken" placeholder="您的 Chatwoot API 访问令牌">
+                </div>
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="forceUpdateWebhook" checked> 强制更新 Webhook 地址
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeModal('chatwootModal')">取消</button>
+                <button class="btn btn-primary" onclick="setupChatwoot()">配置集成</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 代理配置模态框 -->
+    <div class="modal" id="proxyModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>代理配置</h3>
+                <span class="close" onclick="closeModal('proxyModal')">&times;</span>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label for="proxyType">代理类型</label>
+                    <select id="proxyType" onchange="toggleProxyFields()">
+                        <option value="none">不使用代理</option>
+                        <option value="socks5">SOCKS5</option>
+                    </select>
+                </div>
+                <div id="socks5Fields" style="display: none;">
+                    <div class="form-group">
+                        <label>主机</label>
+                        <input type="text" id="proxyHost" placeholder="例如：127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>端口</label>
+                        <input type="text" id="proxyPort" placeholder="例如：1080">
+                    </div>
+                    <div class="form-group">
+                        <label>用户名（可选）</label>
+                        <input type="text" id="proxyUser" placeholder="代理服务器的用户名">
+                    </div>
+                    <div class="form-group">
+                        <label>密码（可选）</label>
+                        <input type="password" id="proxyPass" placeholder="代理服务器的密码">
+                    </div>
+                </div>
+                <div id="proxyTestResult" class="proxy-test-result"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="testProxy()">测试代理</button>
+                <button class="btn btn-primary" onclick="saveProxy()">保存并重启会话</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 消息提示 -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="/assets/js/app.js"></script>
+</body>
+</html> 

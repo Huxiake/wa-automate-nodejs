@@ -4931,6 +4931,18 @@ public async getStatus(contactId: ContactId) : Promise<{
      });
    }
 
+  /**
+   * 处理来自Chatwoot的webhook
+   * @param webhookData The webhook payload from Chatwoot
+   */
+  public async handleChatwootWebhook(webhookData: any): Promise<any> {
+    // 在这里实现完整的处理逻辑
+    // 例如，可以触发一个内部事件
+    log.info(`Received chatwoot webhook inside client`, webhookData);
+    // @ts-ignore
+    await this.pup(PUPPETEER_METHODS.handleChatwootWebhook, webhookData);
+  }
+
 }
 
 export { useragent } from '../config/puppeteer.config'

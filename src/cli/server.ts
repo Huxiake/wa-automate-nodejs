@@ -96,10 +96,10 @@ export const setupHttpServer = (cliConfig: cliFlags) => {
     server = http.createServer(app);
 }
 
-export const setUpExpressApp : () => void = () => {
-    app.use(robots({ UserAgent: '*', Disallow: '/' }))
-    //@ts-ignore
-    app.use(express.json({ limit: '99mb' })) //add the limit option so we can send base64 data through the api
+export const setUpExpressApp = () => {
+    app.use(robots({ UserAgent: '*', Disallow: '/' }));
+    // @ts-ignore
+    app.use(express.json({ limit: '200mb' })); //add the limit option so we can send base64 data through the api
     setupMetaMiddleware();
 }
 

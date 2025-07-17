@@ -163,6 +163,7 @@
     "smashah-puppeteer-page-proxy": "^1.2.8",
     "socket.io": "^4.5.4",
     "socket.io-client": "^4.5.4",
+    "socks-proxy-agent": "^8.0.5",
     "spinnies": "^0.5.1",
     "swagger-stats": "^0.99.1",
     "swagger-ui-dist": "^4.1.3",
