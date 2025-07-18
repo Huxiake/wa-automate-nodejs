@@ -86,6 +86,10 @@ function createSessionCard(session) {
             
             <div class="session-info">
                 <div class="session-info-item">
+                    <span class="session-info-label">代理:</span>
+                    <span class="session-info-value">${session.config.proxyServerCredentials?.address || '无'}</span>
+                </div>
+                <div class="session-info-item">
                     <span class="session-info-label">创建时间:</span>
                     <span class="session-info-value">${createdAt}</span>
                 </div>
@@ -135,6 +139,9 @@ function getSessionActions(session) {
         </button>`);
         actions.push(`<button class="btn btn-secondary" onclick="showProxyModal('${session.sessionId}')">
             <i class="fas fa-shield-alt"></i> 代理
+        </button>`);
+        actions.push(`<button class="btn btn-info" onclick="checkIp('${session.sessionId}')">
+            <i class="fas fa-network-wired"></i> 检查IP
         </button>`);
     }
     
@@ -194,22 +201,78 @@ function filterSessions() {
 function showCreateSessionModal() {
     document.getElementById('createSessionModal').style.display = 'block';
     document.getElementById('newSessionId').value = '';
-    document.getElementById('proxyConfig').value = '';
     document.getElementById('waitForQR').checked = true;
+    // 重置代理字段
+    document.getElementById('enableProxy').checked = false;
+    document.getElementById('createProxyFields').style.display = 'none';
+    document.getElementById('createProxyHost').value = '';
+    document.getElementById('createProxyPort').value = '';
+    document.getElementById('createProxyUser').value = '';
+    document.getElementById('createProxyPass').value = '';
+    document.getElementById('createProxyTestResult').style.display = 'none';
+}
+
+// 切换创建会话模态框中的代理输入字段
+function toggleCreateProxyFields() {
+    const enableProxy = document.getElementById('enableProxy').checked;
+    document.getElementById('createProxyFields').style.display = enableProxy ? 'block' : 'none';
+}
+
+// 在创建会话模态框中测试代理
+async function testCreateProxy() {
+    const host = document.getElementById('createProxyHost').value.trim();
+    const port = document.getElementById('createProxyPort').value.trim();
+    const user = document.getElementById('createProxyUser').value.trim();
+    const pass = document.getElementById('createProxyPass').value.trim();
+
+    if (!host || !port) {
+        showToast('代理地址和端口不能为空', 'error');
+        return;
+    }
+
+    let proxyString = 'socks5h://';
+    if (user && pass) {
+        proxyString += `${user}:${pass}@`;
+    }
+    proxyString += `${host}:${port}`;
+
+    const resultDiv = document.getElementById('createProxyTestResult');
+    resultDiv.style.display = 'block';
+    resultDiv.className = 'proxy-test-result';
+    resultDiv.textContent = '正在测试代理连通性...';
+
+    try {
+        const response = await fetch(`${API_BASE}/check-proxy`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ server: proxyString })
+        });
+        const data = await response.json();
+
+        if (data.success) {
+            resultDiv.classList.add('success');
+            resultDiv.textContent = `测试成功！代理IP: ${data.ip}`;
+        } else {
+            resultDiv.classList.add('error');
+            resultDiv.textContent = `测试失败: ${data.error}`;
+        }
+    } catch (error) {
+        resultDiv.classList.add('error');
+        resultDiv.textContent = `测试请求失败: ${error.message}`;
+    }
 }
 
 // 创建新会话
 async function createSession() {
     const sessionId = document.getElementById('newSessionId').value.trim();
-    const proxyConfig = document.getElementById('proxyConfig').value.trim();
     const waitForQR = document.getElementById('waitForQR').checked;
+    const enableProxy = document.getElementById('enableProxy').checked;
     
     if (!sessionId) {
         showToast('请输入会话ID', 'error');
         return;
     }
     
-    // 检查会话ID是否已存在
     if (sessions.find(s => s.sessionId === sessionId)) {
         showToast('会话ID已存在，请使用其他ID', 'error');
         return;
@@ -225,8 +288,23 @@ async function createSession() {
     };
     
     // 添加代理配置
-    if (proxyConfig) {
-        requestBody.config.proxyServerCredentials = proxyConfig;
+    if (enableProxy) {
+        const host = document.getElementById('createProxyHost').value.trim();
+        const port = document.getElementById('createProxyPort').value.trim();
+        const user = document.getElementById('createProxyUser').value.trim();
+        const pass = document.getElementById('createProxyPass').value.trim();
+
+        if (!host || !port) {
+            showToast('启用了代理，则代理地址和端口不能为空', 'error');
+            return;
+        }
+        
+        requestBody.config.proxyServerCredentials = {
+            protocol: 'http',
+            address: `${host}:${port}`,
+            username: user,
+            password: pass
+        };
     }
     
     try {
@@ -246,15 +324,11 @@ async function createSession() {
             showToast('会话创建成功!', 'success');
             closeModal('createSessionModal');
             
-            // 创建成功后，不再依赖返回的单个对象，而是直接重新加载整个列表
-            // 这是最可靠的UI同步方式
             loadSessions();
 
             // 如果后端返回了二维码，则显示它
             if (data.qrCode) {
-                currentSessionId = sessionId;
-                displayQRCode(data.qrCode);
-                document.getElementById('qrModal').style.display = 'block';
+                showQR(sessionId, data.qrCode);
             }
             
         } else {
@@ -605,7 +679,7 @@ function getProxyString() {
         return false;
     }
     
-    let proxyString = 'socks5://';
+    let proxyString = 'socks5h://';
     if (user && pass) {
         proxyString += `${user}:${pass}@`;
     }
@@ -623,10 +697,10 @@ async function testProxy() {
     resultDiv.textContent = '正在测试代理连通性...';
 
     try {
-        const response = await fetch(`${API_BASE}/sessions/${currentSessionId}/test-proxy`, {
+        const response = await fetch(`${API_BASE}/check-proxy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ proxy: proxyString })
+            body: JSON.stringify({ server: proxyString })
         });
         const data = await response.json();
 
@@ -640,6 +714,21 @@ async function testProxy() {
     } catch (error) {
         resultDiv.classList.add('error');
         resultDiv.textContent = `测试请求失败: ${error.message}`;
+    }
+}
+
+async function checkIp(sessionId) {
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${sessionId}/ip`);
+        const result = await response.json();
+
+        if (response.ok && result.success) {
+            showToast(`会话 ${sessionId} 的IP是: ${result.ip}`, 'success');
+        } else {
+            showToast(`检查IP失败: ${result.error}`, 'error');
+        }
+    } catch (error) {
+        showToast('请求失败，请检查服务器连接', 'error');
     }
 }
 

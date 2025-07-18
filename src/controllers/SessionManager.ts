@@ -150,7 +150,11 @@ export class SessionManager {
             qrTimeout: config.qrTimeout || 120,
             sessionDataPath: config.sessionDataPath || `./sessions/${sessionId}`,
             port: config.port || this.generateUniquePort(),
+            // 如果提供了代理，则强制启用原生代理模式
+            useNativeProxy: config.useNativeProxy === true, // Only enable if explicitly set to true
         };
+
+        console.log('sessionConfig', sessionConfig);
 
         log.info(`Creating session: ${sessionId} with config:`, {
             sessionId,

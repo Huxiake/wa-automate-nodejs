@@ -24,13 +24,15 @@
         <!-- 主要内容区域 -->
         <main class="main-content">
             <!-- 操作工具栏 -->
-            <div class="toolbar">
-                <button class="btn btn-primary" onclick="showCreateSessionModal()">
-                    <i class="fas fa-plus"></i> 新建会话
-                </button>
-                <button class="btn btn-secondary" onclick="refreshSessions()">
-                    <i class="fas fa-sync-alt"></i> 刷新
-                </button>
+            <div class="toolbar" style="display: flex; justify-content: space-between; align-items: center;">
+                <div>
+                    <button class="btn btn-primary" onclick="showCreateSessionModal()">
+                        <i class="fas fa-plus"></i> 新建会话
+                    </button>
+                    <button class="btn btn-secondary" onclick="refreshSessions()">
+                        <i class="fas fa-sync-alt"></i> 刷新
+                    </button>
+                </div>
                 <div class="search-box">
                     <input type="text" placeholder="搜索会话..." id="searchInput" onkeyup="filterSessions()">
                     <i class="fas fa-search"></i>
@@ -62,8 +64,31 @@
                     <input type="text" id="newSessionId" placeholder="输入会话ID，例如：my-session-1">
                 </div>
                 <div class="form-group">
-                    <label>代理配置（可选）</label>
-                    <input type="text" id="proxyConfig" placeholder="http://username:password@proxy-server:port">
+                    <label>
+                        <input type="checkbox" id="enableProxy" onchange="toggleCreateProxyFields()"> 启用代理
+                    </label>
+                </div>
+                <div id="createProxyFields" style="display: none; border-left: 2px solid #007bff; padding-left: 15px; margin-left: 5px;">
+                    <div class="form-group">
+                        <label>代理地址</label>
+                        <input type="text" id="createProxyHost" placeholder="例如：127.0.0.1">
+                    </div>
+                    <div class="form-group">
+                        <label>端口</label>
+                        <input type="text" id="createProxyPort" placeholder="例如：1080">
+                    </div>
+                    <div class="form-group">
+                        <label>用户名 (可选)</label>
+                        <input type="text" id="createProxyUser" placeholder="代理服务器的用户名">
+                    </div>
+                    <div class="form-group">
+                        <label>密码 (可选)</label>
+                        <input type="password" id="createProxyPass" placeholder="代理服务器的密码">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn btn-secondary" onclick="testCreateProxy()">测试代理</button>
+                        <div id="createProxyTestResult" class="proxy-test-result" style="margin-top: 10px;"></div>
+                    </div>
                 </div>
                 <div class="form-group">
                     <label>

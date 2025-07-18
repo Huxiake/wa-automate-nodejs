@@ -106,16 +106,18 @@ export async function initPage(sessionId?: string, config?:ConfigObject, qrManag
   }
 
   const interceptAuthentication = !(config?.safeMode);
-  const proxyAddr = config?.proxyServerCredentials ? `${config.proxyServerCredentials?.username && config.proxyServerCredentials?.password ? `${config.proxyServerCredentials.protocol || 
+  const proxyAddr = config?.proxyServerCredentials ? `${config.proxyServerCredentials?.protocol || 
     config.proxyServerCredentials.address.includes('https') ? 'https' : 
     config.proxyServerCredentials.address.includes('http') ? 'http' : 
+    config.proxyServerCredentials.address.includes('socks5h') ? 'socks5h' : 
     config.proxyServerCredentials.address.includes('socks5') ? 'socks5' : 
     config.proxyServerCredentials.address.includes('socks4') ? 'socks4' : 'http'}://${config.proxyServerCredentials.username}:${config.proxyServerCredentials.password}@${config.proxyServerCredentials.address
     .replace('https', '')
     .replace('http', '')
+    .replace('socks5h', '')
     .replace('socks5', '')
     .replace('socks4', '')
-    .replace('://', '')}` : config.proxyServerCredentials.address}` : false;
+    .replace('://', '')}` : false;
   let quickAuthed = false;
   let proxy;
   if(proxyAddr) {
@@ -158,7 +160,7 @@ export async function initPage(sessionId?: string, config?:ConfigObject, qrManag
       const authCompleteEv = new EvEmitter(sessionId, 'AUTH');
       waPage.on('request', async request => {
         //local refresh cache:
-        if(request.url()==="https://web.whatsapp.com/" && pageCache) {
+        if(request.url()==="https://web.whatsapp.com/" && pageCache && !proxyAddr) {
           //if the pageCache isn't set and this response includes 
           log.info("reviving page from page cache")
             return await request.respond({
@@ -444,9 +446,17 @@ async function initBrowser(sessionId?: string, config:any={}, spinner ?: Spin) {
    * Explicit fallback due to pptr 19
    */
   if(!config.executablePath) config.executablePath = executablePath()
-  if(config?.proxyServerCredentials?.address && config?.useNativeProxy) puppeteerConfig.chromiumArgs.push(`--proxy-server=${config.proxyServerCredentials.address}`)
-  if(config?.browserWsEndpoint) config.browserWSEndpoint = config.browserWsEndpoint;
+
   let args = [...puppeteerConfig.chromiumArgs,...(config?.chromiumArgs||[])];
+
+  // FIX: Correctly apply native browser-level proxy
+  if (config?.proxyServerCredentials?.address && config?.useNativeProxy) {
+    const proxy = `${config.proxyServerCredentials.protocol || 'socks5h'}://${config.proxyServerCredentials.address}`;
+    args.push(`--proxy-server=${proxy}`);
+    spinner?.succeed(`Applying native browser proxy: ${proxy}`);
+  }
+
+  if(config?.browserWsEndpoint) config.browserWSEndpoint = config.browserWsEndpoint;
   if(config?.multiDevice) {
     args = args.filter(x=>x!='--incognito')
     config["userDataDir"] = config["userDataDir"] ||  `${config?.sessionDataPath || (config?.inDocker ? '/sessions' : config?.sessionDataPath || '.') }/_IGNORE_${config?.sessionId || 'session'}`

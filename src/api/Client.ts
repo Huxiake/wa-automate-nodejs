@@ -1454,6 +1454,18 @@ public async testCallback(callbackToTest: SimpleListener, testData: any)  : Prom
     return await pidTreeUsage([process.pid, this._page.browser().process().pid])
   }
 
+  public async getIp(): Promise<string> {
+    return await this._page.evaluate(async () => {
+        try {
+            const response = await fetch('https://api.ipify.org?format=json');
+            const data = await response.json();
+            return data.ip;
+        } catch (error) {
+            return error.message;
+        }
+    });
+  }
+
   
   /**
    * A list of participants in the chat who have their live location on. If the chat does not exist, or the chat does not have any contacts actively sharing their live locations, it will return false. If it's a chat with a single contact, there will be only 1 value in the array if the contact has their livelocation on.

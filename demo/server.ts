@@ -16,7 +16,13 @@ const PORT = 8082;
 //Create your webhook here: https://webhook.site/
 const WEBHOOK_ADDRESS = 'PASTE_WEBHOOK_DOT_SITE_UNIQUE_URL_HERE'
 
-create({ sessionId:'session1'})
+create({ sessionId:'session1',
+  proxyServerCredentials: {
+    address: 'socks5://88.216.251.99:5432',
+    username: 'c6e10',
+    password: 'p2lav77j'
+  }
+})
   .then(async (client:Client) => {
     app.use(client.middleware());
     Object.keys(SimpleListener).map(eventKey=>client.registerWebhook(SimpleListener[eventKey],WEBHOOK_ADDRESS))

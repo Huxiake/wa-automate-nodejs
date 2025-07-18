@@ -56,7 +56,8 @@ export class MultiSessionAPI {
         this.router.get('/sessions/:id/integrations/chatwoot', this.getChatwootIntegrationStatus.bind(this));
         
         // 代理测试路由
-        this.router.post('/sessions/:sessionId/test-proxy', this.testProxy.bind(this));
+        this.router.post('/check-proxy', this.testProxy.bind(this));
+        this.router.get('/sessions/:sessionId/ip', this.getIp.bind(this));
         
         // Chatwoot的专用webhook - 修正路由，确保调用正确的处理程序
         this.router.post('/sessions/:id/chatwoot/webhook', (req, res) => {
@@ -492,42 +493,71 @@ export class MultiSessionAPI {
     }
 
     private async testProxy(req: Request, res: Response): Promise<void> {
-        const { proxy } = req.body;
-        
-        if (!proxy) {
-            // 如果没有提供代理，则直接获取本机IP
-            try {
-                const axios = require('axios');
-                const response = await axios.get('https://api.ipify.org?format=json');
-                res.status(200).json({ success: true, ip: response.data.ip, message: 'No proxy provided. Fetched public IP.' });
-            } catch (error) {
-                res.status(500).json({ success: false, error: 'Failed to fetch public IP.' });
-            }
+        const { server } = req.body;
+        if (!server) {
+            res.status(400).json({ success: false, error: 'Proxy server address is required.' });
             return;
         }
 
         try {
             const { SocksProxyAgent } = require('socks-proxy-agent');
-            const axios = require('axios');
-            
-            const agent = new SocksProxyAgent(proxy);
-            const httpClient = axios.create({ httpsAgent: agent, httpAgent: agent });
-            
-            // 使用代理请求MaxMind的IP查询服务
-            const response = await httpClient.get('https://api.ipify.org?format=json', { timeout: 10000 });
-            
-            res.status(200).json({ success: true, ip: response.data.ip });
+            const https = require('https');
+
+            const agent = new SocksProxyAgent(server);
+
+            const request = https.get('https://api.ipify.org?format=json', { agent, timeout: 15000 }, (response) => {
+                let data = '';
+                response.on('data', (chunk) => {
+                    data += chunk;
+                });
+                response.on('end', () => {
+                    try {
+                        if (response.statusCode >= 200 && response.statusCode < 300) {
+                            const jsonData = JSON.parse(data);
+                            res.status(200).json({ success: true, ip: jsonData.ip, message: 'Proxy connection successful.' });
+                        } else {
+                            log.error(`Proxy test error - Status: ${response.statusCode}, Body: ${data}`);
+                            res.status(500).json({ success: false, error: `Request failed with status code ${response.statusCode}` });
+                        }
+                    } catch (e) {
+                        log.error('Proxy test error - invalid JSON:', e.message);
+                        res.status(500).json({ success: false, error: 'Failed to parse response from ipify.org' });
+                    }
+                });
+            });
+
+            request.on('error', (error) => {
+                log.error('Proxy test request error:', error);
+                res.status(500).json({ success: false, error: `Request error: ${error.message}`, code: error.code });
+            });
+
+            request.on('timeout', () => {
+                request.destroy();
+                log.error('Proxy test timeout');
+                res.status(500).json({ success: false, error: 'Request timed out after 15 seconds' });
+            });
+
         } catch (error) {
-            let errorMessage = 'Unknown error';
-            if (error.code) {
-                errorMessage = `Connection error: ${error.code}`;
-            } else if (error.response) {
-                errorMessage = `Request failed with status: ${error.response.status}`;
-            } else {
-                errorMessage = error.message;
+            log.error('Proxy test setup error:', error);
+            res.status(500).json({ success: false, error: `Setup error: ${error.message}` });
+        }
+    }
+
+    private async getIp(req: Request, res: Response): Promise<void> {
+        try {
+            const { sessionId } = req.params;
+            const client = globalSessionManager.getClient(sessionId);
+
+            if (!client) {
+                res.status(404).json({ success: false, error: `Session ${sessionId} not found or not ready.` });
+                return;
             }
-            log.error('Proxy test error:', errorMessage);
-            res.status(500).json({ success: false, error: errorMessage });
+
+            const ip = await client.getIp();
+            res.status(200).json({ success: true, ip });
+        } catch (error) {
+            log.error('Get IP error:', error);
+            res.status(500).json({ success: false, error: error.message });
         }
     }
 
