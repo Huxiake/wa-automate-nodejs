@@ -37,7 +37,7 @@ COPY --from=build /usr/src/app/dist ./dist
 # 3. Copy other necessary assets and scripts.
 COPY bin ./bin
 COPY web-ui ./web-ui
-COPY public ./public
+
 
 # Expose the port the app runs on.
 EXPOSE 8081
