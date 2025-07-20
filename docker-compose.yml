@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  open-wa:
+    # The name for the container.
+    container_name: open-wa-service
+    
+    # Build the Docker image using the Dockerfile in the current directory.
+    build:
+      context: .
+      dockerfile: Dockerfile
+    
+    # Restart policy: always restart the container if it stops.
+    # This is useful for production environments to ensure the service is always running.
+    restart: always
+    
+    # Port mapping: map port 8081 of the host machine to port 8081 of the container.
+    # This allows you to access the web UI via http://<your_vps_ip>:8081
+    ports:
+      - "8081:8081"
+      
+    # Volume mapping: persist session data.
+    # This maps the 'sessions' directory inside the container to a directory named 'all-sessions' on the host machine.
+    # This ensures that your session data is not lost when the container is stopped or recreated.
+    volumes:
+      - ./all-sessions:/usr/src/app/sessions
+
