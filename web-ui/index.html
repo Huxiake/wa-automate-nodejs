@@ -86,7 +86,7 @@
                         <input type="password" id="createProxyPass" placeholder="代理服务器的密码">
                     </div>
                     <div class="form-group">
-                        <button class="btn btn-secondary" onclick="testCreateProxy()">测试代理</button>
+                        <button class="btn btn-secondary" onclick="testHttpProxy('create')">测试代理</button>
                         <div id="createProxyTestResult" class="proxy-test-result" style="margin-top: 10px;"></div>
                     </div>
                 </div>
@@ -160,44 +160,48 @@
         </div>
     </div>
 
-    <!-- 代理配置模态框 -->
-    <div class="modal" id="proxyModal">
+    
+
+    <!-- 编辑代理模态框 -->
+    <div class="modal" id="editProxyModal">
         <div class="modal-content">
             <div class="modal-header">
-                <h3>代理配置</h3>
-                <span class="close" onclick="closeModal('proxyModal')">&times;</span>
+                <h3>编辑代理配置</h3>
+                <span class="close" onclick="closeModal('editProxyModal')">&times;</span>
             </div>
             <div class="modal-body">
+                <input type="hidden" id="editProxySessionId">
                 <div class="form-group">
-                    <label for="proxyType">代理类型</label>
-                    <select id="proxyType" onchange="toggleProxyFields()">
-                        <option value="none">不使用代理</option>
-                        <option value="socks5">SOCKS5</option>
-                    </select>
+                    <label>
+                        <input type="checkbox" id="editEnableProxy" onchange="toggleEditProxyFields()"> 启用代理
+                    </label>
                 </div>
-                <div id="socks5Fields" style="display: none;">
+                <div id="editProxyFields" style="display: none; border-left: 2px solid #007bff; padding-left: 15px; margin-left: 5px;">
                     <div class="form-group">
-                        <label>主机</label>
-                        <input type="text" id="proxyHost" placeholder="例如：127.0.0.1">
+                        <label>代理地址</label>
+                        <input type="text" id="editProxyHost" placeholder="例如：127.0.0.1">
                     </div>
                     <div class="form-group">
                         <label>端口</label>
-                        <input type="text" id="proxyPort" placeholder="例如：1080">
+                        <input type="text" id="editProxyPort" placeholder="例如：1080">
                     </div>
                     <div class="form-group">
-                        <label>用户名（可选）</label>
-                        <input type="text" id="proxyUser" placeholder="代理服务器的用户名">
+                        <label>用户名 (可选)</label>
+                        <input type="text" id="editProxyUser" placeholder="代理服务器的用户名">
                     </div>
                     <div class="form-group">
-                        <label>密码（可选）</label>
-                        <input type="password" id="proxyPass" placeholder="代理服务器的密码">
+                        <label>密码 (可选)</label>
+                        <input type="password" id="editProxyPass" placeholder="代理服务器的密码">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn btn-secondary" onclick="testHttpProxy('edit')">测试代理</button>
+                        <div id="editProxyTestResult" class="proxy-test-result" style="margin-top: 10px;"></div>
                     </div>
                 </div>
-                <div id="proxyTestResult" class="proxy-test-result"></div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-secondary" onclick="testProxy()">测试代理</button>
-                <button class="btn btn-primary" onclick="saveProxy()">保存并重启会话</button>
+                <button class="btn btn-secondary" onclick="closeModal('editProxyModal')">取消</button>
+                <button class="btn btn-primary" onclick="saveAndRestartSession()">保存并重启</button>
             </div>
         </div>
     </div>

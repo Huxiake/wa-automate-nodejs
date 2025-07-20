@@ -49,6 +49,9 @@ export class MultiSessionAPI {
         // 删除session
         this.router.delete('/sessions/:sessionId', this.deleteSession.bind(this));
         
+        // 重启session（真正的重启，保持会话数据）
+        this.router.post('/sessions/:sessionId/restart', this.restartSession.bind(this));
+        
         // 发送消息
         this.router.post('/sessions/:sessionId/send-message', this.sendMessage.bind(this));
         this.router.post('/sessions/:id/integrations/chatwoot', this.setupChatwootIntegration.bind(this));
@@ -57,7 +60,9 @@ export class MultiSessionAPI {
         
         // 代理测试路由
         this.router.post('/check-proxy', this.testProxy.bind(this));
+        this.router.post('/proxy/test', this.testHttpProxy.bind(this));
         this.router.get('/sessions/:sessionId/ip', this.getIp.bind(this));
+        this.router.post('/sessions/:sessionId/proxy', this.updateSessionProxy.bind(this));
         
         // Chatwoot的专用webhook - 修正路由，确保调用正确的处理程序
         this.router.post('/sessions/:id/chatwoot/webhook', (req, res) => {
@@ -369,6 +374,47 @@ export class MultiSessionAPI {
     }
 
     /**
+     * 重启session（真正的重启，保持会话数据）
+     */
+    private async restartSession(req: Request, res: Response): Promise<void> {
+        try {
+            const { sessionId } = req.params;
+            const { waitForQR = true } = req.body;
+
+            if (!globalSessionManager.hasSession(sessionId)) {
+                res.status(404).json({
+                    success: false,
+                    error: `Session ${sessionId} not found`
+                });
+                return;
+            }
+
+            log.info(`API: Restarting session ${sessionId}, waitForQR: ${waitForQR}`);
+
+            const result = await globalSessionManager.restartSession(sessionId, waitForQR);
+            
+            res.json({
+                success: result.success,
+                message: result.message,
+                qrCode: result.qrCode,
+                data: {
+                    sessionId,
+                    restarted: true,
+                    timestamp: new Date().toISOString(),
+                    hasQRCode: !!result.qrCode
+                }
+            });
+
+        } catch (error) {
+            log.error(`Restart session error:`, error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
+        }
+    }
+
+    /**
      * 发送消息
      */
     private async sendMessage(req: Request, res: Response): Promise<void> {
@@ -543,6 +589,89 @@ export class MultiSessionAPI {
         }
     }
 
+    private async testHttpProxy(req: Request, res: Response): Promise<void> {
+        const { host, port, username, password } = req.body;
+        if (!host || !port) {
+            res.status(400).json({ success: false, error: 'Proxy host and port are required.' });
+            return;
+        }
+
+        try {
+            const axios = require('axios');
+            const { HttpProxyAgent } = require('http-proxy-agent');
+            
+            // 构造代理 URL
+            let proxyUrl;
+            if (username && password) {
+                proxyUrl = `http://${encodeURIComponent(username)}:${encodeURIComponent(password)}@${host}:${port}`;
+            } else {
+                proxyUrl = `http://${host}:${port}`;
+            }
+            
+            log.info(`Testing HTTP proxy: ${host}:${port} ${username ? 'with auth' : 'without auth'}`);
+            
+            // 创建代理 agent
+            const proxyAgent = new HttpProxyAgent(proxyUrl);
+
+            const response = await axios.get('http://api.ipify.org?format=json', {
+                httpAgent: proxyAgent,
+                httpsAgent: proxyAgent,
+                timeout: 15000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+                }
+            });
+
+            if (response.status >= 200 && response.status < 300) {
+                log.info(`Proxy test successful, IP: ${response.data.ip}`);
+                res.status(200).json({ success: true, ip: response.data.ip, message: 'Proxy connection successful.' });
+            } else {
+                log.error(`Proxy test error - Status: ${response.status}, Body: ${JSON.stringify(response.data)}`);
+                res.status(500).json({ success: false, error: `Request failed with status code ${response.status}` });
+            }
+        } catch (error) {
+            log.error('Proxy test request error:', error.message, error.code);
+            
+            let errorMessage = 'Unknown error';
+            let errorCode = error.code;
+            
+            if (error.response) {
+                // Axios 响应错误
+                errorMessage = `HTTP ${error.response.status}: ${error.response.statusText}`;
+                if (error.response.data) {
+                    errorMessage += ` - ${JSON.stringify(error.response.data)}`;
+                }
+            } else if (error.request) {
+                // 请求发送失败
+                if (error.code === 'ECONNREFUSED') {
+                    errorMessage = '代理服务器拒绝连接，请检查代理地址和端口是否正确';
+                } else if (error.code === 'ENOTFOUND') {
+                    errorMessage = '无法解析代理服务器地址，请检查主机名是否正确';
+                } else if (error.code === 'ETIMEDOUT' || error.code === 'ECONNRESET') {
+                    errorMessage = '代理连接超时，请检查网络连接或增加超时时间';
+                } else if (error.code === 'EPROTO') {
+                    errorMessage = '协议错误，可能是代理认证失败或协议不匹配';
+                } else {
+                    errorMessage = `网络错误: ${error.message}`;
+                }
+            } else {
+                // 其他错误
+                errorMessage = error.message;
+            }
+            
+            res.status(500).json({ 
+                success: false, 
+                error: `Request error: ${errorMessage}`, 
+                code: errorCode,
+                details: {
+                    proxyHost: host,
+                    proxyPort: port,
+                    hasAuth: !!(username && password)
+                }
+            });
+        }
+    }
+
     private async getIp(req: Request, res: Response): Promise<void> {
         try {
             const { sessionId } = req.params;
@@ -558,6 +687,33 @@ export class MultiSessionAPI {
         } catch (error) {
             log.error('Get IP error:', error);
             res.status(500).json({ success: false, error: error.message });
+        }
+    }
+
+    private async updateSessionProxy(req: Request, res: Response): Promise<void> {
+        try {
+            const { sessionId } = req.params;
+            const { proxy } = req.body;
+
+            const success = await globalSessionManager.updateSessionProxy(sessionId, proxy);
+
+            if (success) {
+                res.json({
+                    success: true,
+                    message: `Proxy for session ${sessionId} updated and session restarted.`
+                });
+            } else {
+                res.status(404).json({
+                    success: false,
+                    error: `Session ${sessionId} not found`
+                });
+            }
+        } catch (error) {
+            log.error('Update session proxy error:', error);
+            res.status(500).json({
+                success: false,
+                error: error.message
+            });
         }
     }
 

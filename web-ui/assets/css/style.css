@@ -328,6 +328,20 @@ body {
     background-color: #f3f4f6;
 }
 
+.dropdown-item.danger {
+    color: #dc2626;
+}
+
+.dropdown-item.danger:hover {
+    background-color: #fee2e2;
+}
+
+.dropdown-divider {
+    height: 1px;
+    background-color: #e5e7eb;
+    margin: 8px 0;
+}
+
 /* 模态框样式 */
 .modal {
     display: none;

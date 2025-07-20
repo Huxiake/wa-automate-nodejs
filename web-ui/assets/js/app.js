@@ -87,7 +87,7 @@ function createSessionCard(session) {
             <div class="session-info">
                 <div class="session-info-item">
                     <span class="session-info-label">代理:</span>
-                    <span class="session-info-value">${session.config.proxyServerCredentials?.address || '无'}</span>
+                    <span class="session-info-value">${getProxyDisplayText(session.config)}</span>
                 </div>
                 <div class="session-info-item">
                     <span class="session-info-label">创建时间:</span>
@@ -123,6 +123,24 @@ function getStatusText(status) {
     return statusMap[status] || status;
 }
 
+// 获取代理显示文本
+function getProxyDisplayText(config) {
+    if (!config) return '无';
+    
+    const proxy = config.proxyServerCredentials;
+    if (!proxy || !proxy.address) {
+        return '无';
+    }
+    
+    // 显示代理地址，如果有用户名则显示用户名
+    let displayText = proxy.address;
+    if (proxy.username) {
+        displayText += ` (${proxy.username})`;
+    }
+    
+    return displayText;
+}
+
 // 获取会话操作按钮
 function getSessionActions(session) {
     let actions = [];
@@ -137,22 +155,33 @@ function getSessionActions(session) {
         actions.push(`<button class="btn btn-success" onclick="showChatwootModal('${session.sessionId}')">
             <i class="fas fa-link"></i> 配置Chatwoot
         </button>`);
-        actions.push(`<button class="btn btn-secondary" onclick="showProxyModal('${session.sessionId}')">
-            <i class="fas fa-shield-alt"></i> 代理
-        </button>`);
         actions.push(`<button class="btn btn-info" onclick="checkIp('${session.sessionId}')">
             <i class="fas fa-network-wired"></i> 检查IP
         </button>`);
     }
+
+    actions.push(`<button class="btn btn-secondary" onclick="showEditProxyModal('${session.sessionId}')">
+        <i class="fas fa-proxy"></i> 代理设置
+    </button>`);
     
-    // 将删除操作收进一个下拉菜单中，防止误触
+    // 将更多操作收进一个下拉菜单中，防止误触
     actions.push(`
         <div class="more-actions">
             <button class="btn btn-secondary" onclick="toggleMoreActions(this)">
-                <i class="fas fa-ellipsis-h"></i>
+                <i class="fas fa-ellipsis-h"></i> 更多
             </button>
             <div class="dropdown-menu">
-                <button class="dropdown-item" onclick="deleteSession('${session.sessionId}')">
+                <button class="dropdown-item" onclick="restartSession('${session.sessionId}')">
+                    <i class="fas fa-sync-alt"></i> 重启会话 (保持数据)
+                </button>
+                <button class="dropdown-item" onclick="deleteAndRecreateSession('${session.sessionId}')">
+                    <i class="fas fa-redo"></i> 删除重建 (清空数据)
+                </button>
+                <button class="dropdown-item" onclick="debugSessionConfig('${session.sessionId}')">
+                    <i class="fas fa-bug"></i> 调试配置
+                </button>
+                <div class="dropdown-divider"></div>
+                <button class="dropdown-item danger" onclick="deleteSession('${session.sessionId}')">
                     <i class="fas fa-trash"></i> 删除会话
                 </button>
             </div>
@@ -219,33 +248,27 @@ function toggleCreateProxyFields() {
 }
 
 // 在创建会话模态框中测试代理
-async function testCreateProxy() {
-    const host = document.getElementById('createProxyHost').value.trim();
-    const port = document.getElementById('createProxyPort').value.trim();
-    const user = document.getElementById('createProxyUser').value.trim();
-    const pass = document.getElementById('createProxyPass').value.trim();
+async function testHttpProxy(type) {
+    const host = document.getElementById(`${type}ProxyHost`).value.trim();
+    const port = document.getElementById(`${type}ProxyPort`).value.trim();
+    const user = document.getElementById(`${type}ProxyUser`).value.trim();
+    const pass = document.getElementById(`${type}ProxyPass`).value.trim();
+    const resultDiv = document.getElementById(`${type}ProxyTestResult`);
 
     if (!host || !port) {
         showToast('代理地址和端口不能为空', 'error');
         return;
     }
 
-    let proxyString = 'socks5h://';
-    if (user && pass) {
-        proxyString += `${user}:${pass}@`;
-    }
-    proxyString += `${host}:${port}`;
-
-    const resultDiv = document.getElementById('createProxyTestResult');
     resultDiv.style.display = 'block';
     resultDiv.className = 'proxy-test-result';
     resultDiv.textContent = '正在测试代理连通性...';
 
     try {
-        const response = await fetch(`${API_BASE}/check-proxy`, {
+        const response = await fetch(`${API_BASE}/proxy/test`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ server: proxyString })
+            body: JSON.stringify({ host, port, username: user, password: pass })
         });
         const data = await response.json();
 
@@ -298,6 +321,8 @@ async function createSession() {
             showToast('启用了代理，则代理地址和端口不能为空', 'error');
             return;
         }
+
+        requestBody.config.useNativeProxy = true;
         
         requestBody.config.proxyServerCredentials = {
             protocol: 'http',
@@ -460,14 +485,54 @@ async function setupChatwoot() {
     }
 }
 
-// 重启会话
+// 重启会话（真正的重启，保持会话数据）
 async function restartSession(sessionId) {
-    if (!confirm(`确定要重启会话 "${sessionId}" 吗？`)) {
+    if (!confirm(`确定要重启会话 "${sessionId}" 吗？\n\n这将保持会话数据，只重新拉取二维码。`)) {
         return;
     }
     
     try {
         showToast('正在重启会话...', 'info');
+        
+        const response = await fetch(`${API_BASE}/sessions/${sessionId}/restart`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                waitForQR: true
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (data.success) {
+            showToast('会话重启成功!', 'success');
+            
+            // 如果返回了新的二维码，显示它
+            if (data.qrCode) {
+                showQR(sessionId, data.qrCode);
+            }
+            
+            loadSessions();
+        } else {
+            showToast('重启会话失败: ' + (data.error || '未知错误'), 'error');
+        }
+        
+    } catch (error) {
+        console.error('重启会话失败:', error);
+        showToast('重启会话失败: ' + error.message, 'error');
+    }
+}
+
+// 删除并重建会话（旧的重启方式）
+async function deleteAndRecreateSession(sessionId) {
+    if (!confirm(`确定要删除并重建会话 "${sessionId}" 吗？\n\n这将完全删除会话数据并重新创建。`)) {
+        return;
+    }
+    
+    try {
+        showToast('正在删除并重建会话...', 'info');
         
         // 先删除会话
         await fetch(`${API_BASE}/sessions/${sessionId}`, {
@@ -483,6 +548,7 @@ async function restartSession(sessionId) {
                 },
                 body: JSON.stringify({
                     sessionId: sessionId,
+                    waitForQR: true,
                     config: {
                         multiDevice: true,
                         headless: true
@@ -493,17 +559,22 @@ async function restartSession(sessionId) {
             const data = await response.json();
             
             if (data.success) {
-                showToast('会话重启成功!', 'success');
+                showToast('会话重建成功!', 'success');
+                
+                // 如果返回了二维码，显示它
+                if (data.qrCode) {
+                    showQR(sessionId, data.qrCode);
+                }
             } else {
-                showToast('重启会话失败: ' + data.error, 'error');
+                showToast('重建会话失败: ' + data.error, 'error');
             }
             
             loadSessions();
         }, 1000);
         
     } catch (error) {
-        console.error('重启会话失败:', error);
-        showToast('重启会话失败: ' + error.message, 'error');
+        console.error('重建会话失败:', error);
+        showToast('重建会话失败: ' + error.message, 'error');
     }
 }
 
@@ -617,159 +688,136 @@ document.addEventListener('keydown', function(event) {
     }
 });
 
-// 代理配置相关函数
-function showProxyModal(sessionId) {
+
+
+// 编辑代理相关函数
+function showEditProxyModal(sessionId) {
     currentSessionId = sessionId;
     const session = sessions.find(s => s.sessionId === sessionId);
     
-    // 重置表单
-    document.getElementById('proxyType').value = 'none';
-    document.getElementById('proxyHost').value = '';
-    document.getElementById('proxyPort').value = '';
-    document.getElementById('proxyUser').value = '';
-    document.getElementById('proxyPass').value = '';
-    document.getElementById('socks5Fields').style.display = 'none';
-    document.getElementById('proxyTestResult').style.display = 'none';
+    document.getElementById('editProxySessionId').value = sessionId;
 
-    // 如果已有代理配置，则填充表单
-    if (session && session.config && session.config.proxyServerCredentials) {
-        const proxy = session.config.proxyServerCredentials;
-        if (proxy.startsWith('socks5://')) {
-            document.getElementById('proxyType').value = 'socks5';
-            const withoutProtocol = proxy.substring('socks5://'.length);
-            const [auth, hostPort] = withoutProtocol.split('@');
-            
-            if (hostPort) { // 存在认证和主机
-                const [user, pass] = auth.split(':');
-                const [host, port] = hostPort.split(':');
-                document.getElementById('proxyUser').value = user;
-                document.getElementById('proxyPass').value = pass;
-                document.getElementById('proxyHost').value = host;
-                document.getElementById('proxyPort').value = port;
-            } else { // 只存在主机
-                const [host, port] = auth.split(':');
-                document.getElementById('proxyHost').value = host;
-                document.getElementById('proxyPort').value = port;
-            }
-            document.getElementById('socks5Fields').style.display = 'block';
+    const proxy = session?.config?.proxyServerCredentials;
+    const enableProxyCheckbox = document.getElementById('editEnableProxy');
+    const proxyFields = document.getElementById('editProxyFields');
+
+    if (proxy && proxy.address) {
+        enableProxyCheckbox.checked = true;
+        proxyFields.style.display = 'block';
+        const [host, port] = proxy.address.split(':');
+        document.getElementById('editProxyHost').value = host || '';
+        document.getElementById('editProxyPort').value = port || '';
+        document.getElementById('editProxyUser').value = proxy.username || '';
+        document.getElementById('editProxyPass').value = proxy.password || '';
+    } else {
+        enableProxyCheckbox.checked = false;
+        proxyFields.style.display = 'none';
+        document.getElementById('editProxyHost').value = '';
+        document.getElementById('editProxyPort').value = '';
+        document.getElementById('editProxyUser').value = '';
+        document.getElementById('editProxyPass').value = '';
+    }
+
+    document.getElementById('editProxyModal').style.display = 'block';
+}
+
+function toggleEditProxyFields() {
+    const enableProxy = document.getElementById('editEnableProxy').checked;
+    document.getElementById('editProxyFields').style.display = enableProxy ? 'block' : 'none';
+}
+
+
+
+async function saveAndRestartSession() {
+    const sessionId = document.getElementById('editProxySessionId').value;
+    const enableProxy = document.getElementById('editEnableProxy').checked;
+    
+    let proxyConfig = null;
+    if (enableProxy) {
+        const host = document.getElementById('editProxyHost').value.trim();
+        const port = document.getElementById('editProxyPort').value.trim();
+        const user = document.getElementById('editProxyUser').value.trim();
+        const pass = document.getElementById('editProxyPass').value.trim();
+
+        if (!host || !port) {
+            showToast('启用了代理，则代理地址和端口不能为空', 'error');
+            return;
         }
-    }
-    
-    document.getElementById('proxyModal').style.display = 'block';
-}
-
-function toggleProxyFields() {
-    const type = document.getElementById('proxyType').value;
-    document.getElementById('socks5Fields').style.display = type === 'socks5' ? 'block' : 'none';
-}
-
-function getProxyString() {
-    const type = document.getElementById('proxyType').value;
-    if (type === 'none') {
-        return null;
+        
+        // Ensure the proxy format is what the backend expects for native proxy
+        proxyConfig = {
+            protocol: 'http', // Explicitly set protocol
+            address: `${host}:${port}`,
+            username: user,
+            password: pass
+        };
     }
 
-    const host = document.getElementById('proxyHost').value.trim();
-    const port = document.getElementById('proxyPort').value.trim();
-    const user = document.getElementById('proxyUser').value.trim();
-    const pass = document.getElementById('proxyPass').value.trim();
-
-    if (!host || !port) {
-        showToast('代理主机和端口不能为空', 'error');
-        return false;
-    }
-    
-    let proxyString = 'socks5h://';
-    if (user && pass) {
-        proxyString += `${user}:${pass}@`;
-    }
-    proxyString += `${host}:${port}`;
-    return proxyString;
-}
-
-async function testProxy() {
-    const proxyString = getProxyString();
-    if (proxyString === false) return; // 校验失败
-
-    const resultDiv = document.getElementById('proxyTestResult');
-    resultDiv.style.display = 'block';
-    resultDiv.className = 'proxy-test-result';
-    resultDiv.textContent = '正在测试代理连通性...';
+    showToast('正在保存配置并重启会话...', 'info');
 
     try {
-        const response = await fetch(`${API_BASE}/check-proxy`, {
+        // The backend endpoint expects the entire config object
+        const response = await fetch(`${API_BASE}/sessions/${sessionId}/proxy`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ server: proxyString })
+            body: JSON.stringify({ proxy: proxyConfig })
         });
         const data = await response.json();
 
         if (data.success) {
-            resultDiv.classList.add('success');
-            resultDiv.textContent = `测试成功！代理IP: ${data.ip}`;
-        } else {
-            resultDiv.classList.add('error');
-            resultDiv.textContent = `测试失败: ${data.error}`;
-        }
-    } catch (error) {
-        resultDiv.classList.add('error');
-        resultDiv.textContent = `测试请求失败: ${error.message}`;
-    }
-}
-
-async function checkIp(sessionId) {
-    try {
-        const response = await fetch(`${API_BASE}/sessions/${sessionId}/ip`);
-        const result = await response.json();
-
-        if (response.ok && result.success) {
-            showToast(`会话 ${sessionId} 的IP是: ${result.ip}`, 'success');
-        } else {
-            showToast(`检查IP失败: ${result.error}`, 'error');
-        }
-    } catch (error) {
-        showToast('请求失败，请检查服务器连接', 'error');
-    }
-}
-
-async function saveProxy() {
-    const proxyString = getProxyString();
-    if (proxyString === false && document.getElementById('proxyType').value !== 'none') return;
-    
-    showToast('正在保存代理配置并重启会话...', 'info');
-
-    try {
-        // 1. 删除现有会话
-        await fetch(`${API_BASE}/sessions/${currentSessionId}`, { method: 'DELETE' });
-
-        // 2. 延迟后用新配置创建会话
-        setTimeout(async () => {
-            const requestBody = {
-                sessionId: currentSessionId,
-                waitForQR: false, // 重启后不自动打开二维码
-                config: {
-                    multiDevice: true,
-                    headless: true,
-                    proxyServerCredentials: proxyString // 应用新的代理配置
-                }
-            };
-            const response = await fetch(`${API_BASE}/sessions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(requestBody)
-            });
-            const data = await response.json();
-
-            if (data.success) {
-                showToast('会话已使用新配置重启！', 'success');
-                closeModal('proxyModal');
+            showToast('配置已保存，会话正在重启', 'success');
+            closeModal('editProxyModal');
+            // 强制刷新会话数据
+            setTimeout(() => {
                 loadSessions();
-            } else {
-                showToast('重启会话失败: ' + data.error, 'error');
-            }
-        }, 1500); // 延迟以确保旧会话完全终止
-
+                // 再次刷新确保获取最新数据
+                setTimeout(loadSessions, 2000);
+            }, 1500);
+        } else {
+            showToast('保存失败: ' + data.error, 'error');
+        }
     } catch (error) {
-        showToast('保存代理配置失败: ' + error.message, 'error');
+        showToast('请求失败: ' + error.message, 'error');
+    }
+}
+
+// 调试会话配置
+async function debugSessionConfig(sessionId) {
+    try {
+        const response = await fetch(`${API_BASE}/sessions/${sessionId}`);
+        const data = await response.json();
+        
+        if (data.success) {
+            const config = data.data.config;
+            const proxyInfo = config.proxyServerCredentials;
+            
+            let debugInfo = `会话 ${sessionId} 配置信息：\n\n`;
+            debugInfo += `状态: ${data.data.status}\n`;
+            debugInfo += `创建时间: ${new Date(data.data.createdAt).toLocaleString()}\n`;
+            debugInfo += `最后活动: ${new Date(data.data.lastActivity).toLocaleString()}\n\n`;
+            
+            debugInfo += `代理配置:\n`;
+            if (proxyInfo && proxyInfo.address) {
+                debugInfo += `- 地址: ${proxyInfo.address}\n`;
+                debugInfo += `- 协议: ${proxyInfo.protocol || 'http'}\n`;
+                debugInfo += `- 用户名: ${proxyInfo.username || '无'}\n`;
+                debugInfo += `- 密码: ${proxyInfo.password ? '已设置' : '无'}\n`;
+                debugInfo += `- 原生代理模式: ${config.useNativeProxy ? '启用' : '禁用'}\n`;
+            } else {
+                debugInfo += `- 未配置代理\n`;
+            }
+            
+            debugInfo += `\n其他配置:\n`;
+            debugInfo += `- 多设备模式: ${config.multiDevice ? '启用' : '禁用'}\n`;
+            debugInfo += `- 无头模式: ${config.headless ? '启用' : '禁用'}\n`;
+            debugInfo += `- 会话数据路径: ${config.sessionDataPath}\n`;
+            
+            alert(debugInfo);
+        } else {
+            showToast('获取会话配置失败: ' + data.error, 'error');
+        }
+    } catch (error) {
+        console.error('调试会话配置失败:', error);
+        showToast('调试会话配置失败: ' + error.message, 'error');
     }
 } 

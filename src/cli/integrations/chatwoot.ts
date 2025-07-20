@@ -198,7 +198,7 @@ class ChatwootClient {
         this.origin = _u.origin;
         this.port = Number(_u.port || 80);
         this.client = client;
-        this.expectedSelfWebhookUrl = cliConfig.apiHost ? `${cliConfig.apiHost}/chatwoot ` : `${(cliConfig.host as string).includes('http') ? '' : `http${cliConfig.https || (cliConfig.cert && cliConfig.privkey) ? 's' : ''}://`}${cliConfig.host}:${cliConfig.port}/chatwoot `;
+        this.expectedSelfWebhookUrl = cliConfig.apiHost ? `${cliConfig.apiHost}` : `${(cliConfig.host as string).includes('http') ? '' : `http${cliConfig.https || (cliConfig.cert && cliConfig.privkey) ? 's' : ''}://`}${cliConfig.host}:${cliConfig.port}`;
         this.expectedSelfWebhookUrl = this.expectedSelfWebhookUrl.trim()
         this.key = cliConfig.key
         if (cliConfig.key) this.expectedSelfWebhookUrl = `${this.expectedSelfWebhookUrl}?api_key=${cliConfig.key}`

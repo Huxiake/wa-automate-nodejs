@@ -3,7 +3,7 @@ import { create } from './initializer';
 import { ev } from './events';
 import { ConfigObject } from '../api/model/config';
 import { log } from '../logging/logging';
-import * as fs from 'fs';
+import * as fs from 'fs-extra'; // Use fs-extra for robust file operations
 import * as path from 'path';
 
 export interface SessionInstance {
@@ -42,18 +42,97 @@ export class SessionManager {
             fs.statSync(path.join(sessionsDir, file)).isDirectory()
         );
         
-        log.info(`Found ${sessionFolders.length} existing session(s) to restore: ${sessionFolders.join(', ')}`);
+        log.info(`Found ${sessionFolders.length} session folder(s): ${sessionFolders.join(', ')}`);
+
+        // 验证并恢复有效的会话
+        const validSessions: string[] = [];
+        const invalidSessions: string[] = [];
 
         sessionFolders.forEach(sessionId => {
             if (!this.sessions.has(sessionId)) {
-                log.info(`Restoring session: ${sessionId}`);
-                // 使用createSession来恢复，但不等待QR码
-                // 这将触发底层的puppeteer来从现有文件中加载会话
-                this.createSession(sessionId, {}, false).catch(error => {
-                    log.error(`Failed to restore session ${sessionId}:`, error);
-                });
+                const configPath = path.join(sessionsDir, sessionId, 'config.json');
+                
+                if (!fs.existsSync(configPath)) {
+                    log.warn(`Session ${sessionId} has no config.json, marking as invalid`);
+                    invalidSessions.push(sessionId);
+                    return;
+                }
+
+                try {
+                    const configContent = fs.readFileSync(configPath, 'utf-8');
+                    const config = JSON.parse(configContent);
+                    
+                    // 检查配置文件是否有效
+                    if (!config || typeof config !== 'object') {
+                        throw new Error('Invalid config format');
+                    }
+
+                    // 检查是否有必要的字段
+                    if (!config.sessionId && !sessionId) {
+                        throw new Error('Missing sessionId');
+                    }
+
+                    // 确保代理配置被正确恢复
+                    if (config.proxyServerCredentials) {
+                        log.info(`Session ${sessionId} has proxy config: ${config.proxyServerCredentials.address}`);
+                        // 确保启用原生代理模式
+                        config.useNativeProxy = true;
+                    }
+
+                    log.info(`Restoring valid session: ${sessionId} with config:`, {
+                        sessionId,
+                        hasProxy: !!config.proxyServerCredentials,
+                        proxyAddress: config.proxyServerCredentials?.address,
+                        useNativeProxy: config.useNativeProxy
+                    });
+                    validSessions.push(sessionId);
+                    
+                    this.createSession(sessionId, config, false).catch(error => {
+                        log.error(`Failed to restore session ${sessionId}:`, error);
+                        // 如果恢复失败，也将其标记为无效
+                        invalidSessions.push(sessionId);
+                    });
+
+                } catch (error) {
+                    log.error(`Failed to parse config for session ${sessionId}:`, error);
+                    invalidSessions.push(sessionId);
+                }
             }
         });
+
+        log.info(`Valid sessions to restore: ${validSessions.length} (${validSessions.join(', ')})`);
+        
+        if (invalidSessions.length > 0) {
+            log.warn(`Invalid sessions found: ${invalidSessions.length} (${invalidSessions.join(', ')})`);
+            log.info('Cleaning up invalid session directories...');
+            
+            // 异步清理无效的会话目录
+            this.cleanupInvalidSessions(invalidSessions).catch(error => {
+                log.error('Error during invalid session cleanup:', error);
+            });
+        }
+    }
+
+    /**
+     * 清理无效的会话目录
+     */
+    private async cleanupInvalidSessions(invalidSessionIds: string[]): Promise<void> {
+        const cleanupPromises = invalidSessionIds.map(async sessionId => {
+            try {
+                log.info(`Cleaning up invalid session: ${sessionId}`);
+                const success = await this.forceCleanupSessionFiles(sessionId);
+                if (success) {
+                    log.info(`Successfully cleaned up invalid session: ${sessionId}`);
+                } else {
+                    log.warn(`Could not fully clean up invalid session: ${sessionId}`);
+                }
+            } catch (error) {
+                log.error(`Error cleaning up invalid session ${sessionId}:`, error);
+            }
+        });
+
+        await Promise.all(cleanupPromises);
+        log.info('Invalid session cleanup completed');
     }
 
     /**
@@ -143,7 +222,6 @@ export class SessionManager {
 
         const sessionConfig: ConfigObject = {
             ...this.defaultConfig,
-            ...config,
             sessionId,
             // 强制qrLogSkip为true，以防止在控制台打印QR码
             qrLogSkip: true,
@@ -152,6 +230,7 @@ export class SessionManager {
             port: config.port || this.generateUniquePort(),
             // 如果提供了代理，则强制启用原生代理模式
             useNativeProxy: config.useNativeProxy === true, // Only enable if explicitly set to true
+            ...config, // 将文件配置放在最后，确保其优先级最高
         };
 
         console.log('sessionConfig', sessionConfig);
@@ -172,6 +251,15 @@ export class SessionManager {
             lastActivity: new Date(),
         };
         this.sessions.set(sessionId, sessionInstance);
+
+        // 保存初始配置
+        const sessionDir = path.join('./sessions', sessionId);
+        if (!fs.existsSync(sessionDir)) {
+            fs.mkdirSync(sessionDir, { recursive: true });
+        }
+        const configPath = path.join(sessionDir, 'config.json');
+        fs.writeFileSync(configPath, JSON.stringify(sessionConfig, null, 4));
+        log.info(`Initial config for ${sessionId} saved to ${configPath}`);
 
         // 只有在需要时才等待QR码
         let qrCodePromise: Promise<string | null> | null = null;
@@ -322,24 +410,137 @@ export class SessionManager {
     async removeSession(sessionId: string): Promise<boolean> {
         const session = this.sessions.get(sessionId);
         if (!session) {
-            return false;
+            log.warn(`Session ${sessionId} not found in memory, checking filesystem...`);
+            // 即使内存中没有会话，也尝试清理文件系统
+            const cleanupSuccess = await this.forceCleanupSessionFiles(sessionId);
+            return cleanupSuccess;
         }
 
+        log.info(`Attempting to remove session: ${sessionId}`);
+
+        // 1. Immediately remove the session from the map to prevent race conditions.
+        // This is now the single source of truth for the session's existence.
+        this.sessions.delete(sessionId);
+        log.info(`Session ${sessionId} removed from in-memory map.`);
+
+        // 2. Clean up any pending QR code promises for this session.
+        this.qrPromises.delete(sessionId);
+
+        let clientKillSuccess = true;
         try {
-            if (session.client && session.status === 'ready') {
+            // 3. Attempt to gracefully kill the client process.
+            if (session.client) {
                 await session.client.kill('SESSION_REMOVED');
+                log.info(`Client for session ${sessionId} killed.`);
+                // 等待一段时间让进程完全退出和文件句柄释放
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+        } catch (error) {
+            log.error(`Error during client kill for session ${sessionId}, continuing cleanup:`, error);
+            clientKillSuccess = false;
+            // 即使杀死进程失败，也给一些时间让进程自然结束
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // 4. 强制清理文件系统
+        const filesystemCleanupSuccess = await this.forceCleanupSessionFiles(sessionId);
+
+        const overallSuccess = clientKillSuccess && filesystemCleanupSuccess;
+        log.info(`Session ${sessionId} removal process completed. Success: ${overallSuccess}`);
+        return overallSuccess;
+    }
+
+    /**
+     * 强制清理会话文件，包含重试机制
+     */
+    private async forceCleanupSessionFiles(sessionId: string): Promise<boolean> {
+        const sessionDir = path.resolve('./sessions', sessionId);
+        
+        if (!fs.existsSync(sessionDir)) {
+            log.info(`Session directory ${sessionDir} does not exist, cleanup not needed.`);
+            return true;
+        }
+
+        log.info(`Attempting to remove session directory: ${sessionDir}`);
+
+        // 重试删除，最多3次
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            try {
+                // 如果是Windows系统，先尝试修改权限
+                if (process.platform === 'win32') {
+                    try {
+                        // 递归设置文件夹权限为可写
+                        await this.setDirectoryPermissions(sessionDir);
+                    } catch (permError) {
+                        log.warn(`Could not set permissions for ${sessionDir}:`, permError.message);
+                    }
+                }
+
+                await fs.remove(sessionDir);
+                log.info(`Session directory ${sessionDir} successfully removed on attempt ${attempt}.`);
+                return true;
+
+            } catch (error) {
+                log.error(`Attempt ${attempt} to remove session directory failed:`, error.message);
+                
+                if (attempt < 3) {
+                    // 等待时间逐渐增加
+                    const waitTime = attempt * 1000;
+                    log.info(`Waiting ${waitTime}ms before retry...`);
+                    await new Promise(resolve => setTimeout(resolve, waitTime));
+                } else {
+                    log.error(`Failed to remove session directory ${sessionDir} after ${attempt} attempts. Manual cleanup may be required.`);
+                    
+                    // 最后尝试：至少删除配置文件，这样重启时不会恢复会话
+                    try {
+                        const configPath = path.join(sessionDir, 'config.json');
+                        if (fs.existsSync(configPath)) {
+                            await fs.unlink(configPath);
+                            log.info(`Removed config file ${configPath} to prevent session resurrection.`);
+                        }
+                    } catch (configError) {
+                        log.error(`Failed to remove config file:`, configError.message);
+                    }
+                    
+                    return false;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * 设置目录权限（Windows系统）
+     */
+    private async setDirectoryPermissions(dirPath: string): Promise<void> {
+        if (process.platform !== 'win32') return;
+
+        try {
+            // 递归遍历目录并设置权限
+            const items = await fs.readdir(dirPath);
+            
+            for (const item of items) {
+                const itemPath = path.join(dirPath, item);
+                const stats = await fs.stat(itemPath);
+                
+                if (stats.isDirectory()) {
+                    await this.setDirectoryPermissions(itemPath);
+                } else {
+                    // 尝试设置文件为可写
+                    try {
+                        await fs.chmod(itemPath, 0o666);
+                    } catch (chmodError) {
+                        // 忽略权限设置错误
+                    }
+                }
             }
             
-            // 清理QR码Promise
-            this.qrPromises.delete(sessionId);
-            
-            this.sessions.delete(sessionId);
-            log.info(`Session ${sessionId} removed successfully`);
-            return true;
-
+            // 设置目录权限
+            await fs.chmod(dirPath, 0o777);
         } catch (error) {
-            log.error(`Failed to remove session ${sessionId}:`, error);
-            return false;
+            // 权限设置失败不是致命错误
+            throw error;
         }
     }
 
@@ -365,6 +566,171 @@ export class SessionManager {
         if (session) {
             session.lastActivity = new Date();
         }
+    }
+
+    /**
+     * 真正重启会话 - 保持会话数据，只重新拉取二维码
+     * @param sessionId 会话ID
+     * @param waitForQR 是否等待新的QR码
+     */
+    public async restartSession(sessionId: string, waitForQR: boolean = true): Promise<{
+        success: boolean;
+        message: string;
+        qrCode?: string;
+    }> {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error(`Session ${sessionId} not found`);
+        }
+
+        log.info(`真正重启会话: ${sessionId}`);
+
+        try {
+            // 1. 保存当前配置
+            const currentConfig = { ...session.config };
+            
+            // 2. 如果有客户端，优雅地关闭它但不删除会话数据
+            if (session.client) {
+                log.info(`关闭会话 ${sessionId} 的客户端连接...`);
+                await session.client.kill('SESSION_RESTART');
+                // 等待客户端完全关闭
+                await new Promise(resolve => setTimeout(resolve, 2000));
+            }
+
+            // 3. 重置会话状态但保留基本信息
+            session.client = null;
+            session.status = 'initializing';
+            session.lastActivity = new Date();
+            delete session.qrCode;
+            delete session.qrCodeUrl;
+
+            log.info(`会话 ${sessionId} 状态已重置，开始重新初始化...`);
+
+            // 4. 如果需要等待QR码，设置Promise
+            let qrCodePromise: Promise<string | null> | null = null;
+            if (waitForQR) {
+                qrCodePromise = this.waitForQRCode(sessionId, 35000);
+            }
+
+            // 5. 重新创建客户端（使用相同的sessionId和配置）
+            create(currentConfig)
+                .then(client => {
+                    log.info(`会话 ${sessionId} 客户端重新创建成功`);
+                    session.client = client;
+                    session.status = 'ready';
+                    session.lastActivity = new Date();
+                    this.setupSessionEvents(sessionId, client);
+                })
+                .catch(error => {
+                    log.error(`会话 ${sessionId} 重启失败:`, error);
+                    session.status = 'failed';
+                    
+                    // 如果有等待的Promise，则拒绝它
+                    const promiseHandlers = this.qrPromises.get(sessionId);
+                    if (promiseHandlers) {
+                        promiseHandlers.reject(error);
+                        this.qrPromises.delete(sessionId);
+                    }
+                });
+
+            // 6. 如果需要，等待QR码
+            if (waitForQR && qrCodePromise) {
+                log.info(`等待会话 ${sessionId} 的新QR码...`);
+                try {
+                    const qrCode = await qrCodePromise;
+                    if (qrCode) {
+                        log.info(`会话 ${sessionId} 重启成功，获得新QR码`);
+                        return {
+                            success: true,
+                            message: "会话重启成功，请扫描新的二维码",
+                            qrCode,
+                        };
+                    } else {
+                        log.warn(`会话 ${sessionId} 重启超时`);
+                        return {
+                            success: false,
+                            message: '重启超时，未能获取新的二维码',
+                        };
+                    }
+                } catch(error) {
+                    log.error(`会话 ${sessionId} 重启过程中出错:`, error);
+                    return {
+                        success: false,
+                        message: `重启失败: ${error.message}`,
+                    };
+                }
+            } else {
+                return {
+                    success: true,
+                    message: '会话重启已启动，请稍后获取二维码',
+                };
+            }
+
+        } catch (error) {
+            log.error(`重启会话 ${sessionId} 时发生错误:`, error);
+            session.status = 'failed';
+            throw error;
+        }
+    }
+
+    /**
+     * 更新并保存会话的代理配置，然后重启会话
+     * @param sessionId 会话ID
+     * @param proxyConfig 新的代理配置
+     */
+    public async updateSessionProxy(sessionId: string, proxyConfig: any): Promise<boolean> {
+        const session = this.sessions.get(sessionId);
+        if (!session) {
+            throw new Error(`Session ${sessionId} not found`);
+        }
+
+        const sessionDir = path.join('./sessions', sessionId);
+        if (!fs.existsSync(sessionDir)) {
+            fs.mkdirSync(sessionDir, { recursive: true });
+        }
+        
+        const configPath = path.join(sessionDir, 'config.json');
+        let config: Partial<ConfigObject> = {};
+        if (fs.existsSync(configPath)) {
+            try {
+                config = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            } catch (e) {
+                log.error(`Error reading config file for ${sessionId}, a new one will be created.`);
+            }
+        }
+
+        // 更新代理配置
+        config.proxyServerCredentials = proxyConfig;
+        // 同步useNativeProxy状态
+        if (proxyConfig && proxyConfig.address) {
+            config.useNativeProxy = true;
+        } else {
+            delete config.useNativeProxy;
+            delete config.proxyServerCredentials;
+        }
+
+        // 保存更新后的配置
+        fs.writeFileSync(configPath, JSON.stringify(config, null, 4));
+        log.info(`Proxy config for ${sessionId} saved to ${configPath}:`, {
+            proxyAddress: config.proxyServerCredentials?.address,
+            useNativeProxy: config.useNativeProxy
+        });
+
+        // 立即更新内存中的配置
+        session.config = { ...session.config, ...config };
+        session.lastActivity = new Date();
+        
+        log.info(`Memory config updated for ${sessionId}:`, {
+            proxyAddress: session.config.proxyServerCredentials?.address,
+            useNativeProxy: session.config.useNativeProxy
+        });
+
+        // 使用真正的重启功能
+        log.info(`重启会话 ${sessionId} 以应用新的代理设置...`);
+        await this.restartSession(sessionId, false);
+        log.info(`会话 ${sessionId} 重启成功，代理配置已应用`);
+
+        return true;
     }
 
     /**

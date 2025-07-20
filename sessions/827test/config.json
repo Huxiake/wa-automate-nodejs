@@ -1,0 +1,16 @@
+{
+    "sessionId": "827test",
+    "qrLogSkip": true,
+    "qrTimeout": 120,
+    "sessionDataPath": "./sessions/827test",
+    "port": 8080,
+    "useNativeProxy": true,
+    "multiDevice": true,
+    "headless": true,
+    "proxyServerCredentials": {
+        "protocol": "http",
+        "address": "80.71.154.181:5432",
+        "username": "g3285",
+        "password": "xfox92zy"
+    }
+}
